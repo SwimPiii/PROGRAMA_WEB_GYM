@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f5f7">
+  <meta name="description" content="Rutina de gimnasio semanal con registro de pesos y repeticiones.">
+  <title>Simios Poderosos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://apis.google.com/js/api.js" async defer></script>
+  <script src="config.js" defer></script>
+  <script src="drive.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Simios Poderosos</span></div>
+      <div class="topbar-right">
+        <span class="sync-status" id="sync-status"><span class="status-dot"></span><span id="sync-label">Conectando con Drive…</span></span>
+        <button class="button button-primary button-small save-button" id="save-button" type="button" disabled>Guardar</button>
+        <button class="button button-outline button-small" id="connect-button" type="button">Conectar Drive</button>
+      </div>
+    </header>
+
+    <main>
+      <nav class="tabs" aria-label="Secciones principales" role="tablist">
+        <button class="tab active" id="tab-rutina" role="tab" aria-selected="true" aria-controls="panel-rutina" data-panel="rutina"><span>01</span> Rutina</button>
+        <button class="tab" id="tab-ejercicios" role="tab" aria-selected="false" aria-controls="panel-ejercicios" data-panel="ejercicios"><span>02</span> Ejercicios</button>
+      </nav>
+
+      <div id="connection-notice" class="notice"><span class="notice-icon" aria-hidden="true"></span><div><strong>Conecta con Google Drive para guardar en la nube</strong><p>O prueba primero sin configurar Drive. El modo de prueba guarda los datos solo en este navegador.</p></div><div class="notice-actions"><button class="button button-outline" id="demo-button" type="button">Probar sin Drive</button><button class="button button-dark" id="notice-connect" type="button">Conectar Drive</button></div></div>
+
+      <section class="panel active" id="panel-rutina" role="tabpanel" aria-labelledby="tab-rutina">
+        <div class="section-heading plan-heading">
+          <div><h2>Rutina</h2><p class="section-copy">Entrenamiento del día, con el peso y las repeticiones de la última vez para intentar superarte.</p></div>
+        </div>
+
+          <div class="person-tabs" id="person-tabs" role="tablist" aria-label="Selecciona quién entrena"></div>
+
+          <div class="day-toolbar">
+          <div class="day-nav"><button class="icon-button" id="previous-day" type="button" aria-label="Día anterior">←</button><div><strong id="day-label">—</strong><span id="day-sublabel"></span></div><button class="icon-button" id="next-day" type="button" aria-label="Día siguiente">→</button></div>
+          <button class="text-button" id="current-day" type="button">Ir a hoy</button>
+        </div>
+
+        <div class="swap-box card" id="swap-box">
+          <div class="swap-info">
+            <strong>Rutina planificada: <span id="swap-current-label">—</span></strong>
+            <span class="muted-small" id="swap-hint">Puedes cambiarla por la rutina de otro día si aún no has registrado nada hoy.</span>
+          </div>
+          <div class="swap-actions">
+            <select class="input swap-select" id="swap-select" aria-label="Elegir rutina de otro día"></select>
+            <button class="button button-outline button-small" id="swap-apply" type="button">Intercambiar</button>
+            <button class="button button-quiet button-small" id="swap-reset" type="button" hidden>Quitar cambio</button>
+          </div>
+        </div>
+
+        <div class="routine-day" id="routine-day"></div>
+      </section>
+
+      <section class="panel" id="panel-ejercicios" role="tabpanel" aria-labelledby="tab-ejercicios" hidden>
+        <div class="section-heading"><div><h2>Ejercicios</h2><p class="section-copy">Edita el nombre, las series, las repeticiones y un comentario opcional de cada máquina o ejercicio por grupo muscular.</p></div></div>
+
+        <div class="muscle-tabs" id="muscle-tabs" role="tablist" aria-label="Grupos musculares"></div>
+
+        <div class="exercise-layout">
+          <form id="exercise-form" class="card exercise-form">
+            <div class="form-title"><div><h3 id="exercise-form-heading">Añadir ejercicio</h3><p>Los campos con * son obligatorios</p></div></div>
+            <input type="hidden" id="exercise-id">
+            <label class="field-label" for="exercise-name">Nombre del ejercicio o máquina <span>*</span></label>
+            <input class="input" id="exercise-name" type="text" maxlength="100" placeholder="Ej. Press banca" required>
+            <div class="exercise-number-fields">
+              <div><label class="field-label" for="exercise-sets">Series <span>*</span></label><input class="input" id="exercise-sets" type="number" min="1" max="20" step="1" value="3" required></div>
+              <div><label class="field-label" for="exercise-reps">Repeticiones <span>*</span></label><input class="input" id="exercise-reps" type="number" min="1" max="100" step="1" value="10" required></div>
+            </div>
+            <label class="field-label" for="exercise-comment">Comentario adicional</label>
+            <textarea class="input exercise-comment" id="exercise-comment" maxlength="300" rows="3" placeholder="Ej. agarre cerrado, ajustar banco en el 4…"></textarea>
+            <div class="form-actions"><button class="button button-primary" id="save-exercise" type="submit">Guardar ejercicio</button><button class="button button-quiet" id="cancel-exercise-edit" type="button" hidden>Cancelar</button></div>
+          </form>
+          <div class="exercise-list-wrap">
+            <div class="list-toolbar"><div><h3 id="exercise-list-title">Ejercicios</h3><span id="exercise-summary" class="muted-small">0 ejercicios guardados</span></div></div>
+            <div class="exercise-list" id="exercise-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </div>
+</body>
+</html>
