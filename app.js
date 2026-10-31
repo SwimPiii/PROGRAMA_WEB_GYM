@@ -71,7 +71,8 @@
         sets: Math.max(1, Math.round(Number(item.sets) || 1)),
         reps: Math.max(1, Math.round(Number(item.reps) || 1)),
         comment: String(item.comment || "").trim(),
-        active: item.active !== false
+        active: item.active !== false,
+        days: Array.isArray(item.days) ? item.days.map(Number).filter(day => Number.isInteger(day) && day >= 0 && day <= 6) : null
       }));
     });
     const overrides = {};
@@ -93,7 +94,7 @@
     const overrides = {};
     if (rawMap && typeof rawMap === "object") {
       Object.entries(rawMap).forEach(([key, plan]) => {
-        if (Array.isArray(plan)) overrides[key] = plan.filter(item => item && MUSCLES.includes(item.muscle)).map(item => ({ muscle: item.muscle, intensity: ["F", "N", "S"].includes(item.intensity) ? item.intensity : "N" }));
+        if (Array.isArray(plan)) overrides[key] = plan.filter(item => item && MUSCLES.includes(item.muscle)).map(item => ({ muscle: item.muscle, intensity: ["F", "N", "S"].includes(item.intensity) ? item.intensity : "N", day: Number.isInteger(item.day) ? item.day : null }));
       });
     }
     return overrides;
@@ -222,7 +223,7 @@
     $("#swap-select").disabled = !enabled || dayClosed;
     $("#swap-apply").disabled = !enabled || dayClosed;
     $("#swap-reset").disabled = !enabled;
-    $$(".exercise-edit, .exercise-delete, .exercise-toggle, .finish-day").forEach(element => { element.disabled = !enabled; });
+    $$(".exercise-edit, .exercise-delete, .exercise-toggle, .day-chip, .finish-day").forEach(element => { element.disabled = !enabled; });
     $$(".set-input").forEach(element => { element.disabled = !enabled || isDayLocked(viewedDate); });
     updateSaveButton();
   }
@@ -237,7 +238,11 @@
   function currentOverrides() { return state.overrides[activePerson]; }
   function currentSessions() { return state.sessions[activePerson]; }
 
-  function getDefaultPlan(date) { return DEFAULT_TEMPLATE[date.getDay()].map(item => ({ ...item })); }
+  function getDefaultPlan(date) { return DEFAULT_TEMPLATE[date.getDay()].map(item => ({ ...item, day: date.getDay() })); }
+
+  // Un ejercicio sin "days" aparece en todos los días en que toca su grupo muscular.
+  function exerciseAppliesToDay(exercise, day) { return !exercise.days || day == null || exercise.days.includes(day); }
+  function trainingDaysFor(muscle) { return [1, 2, 3, 4, 5, 6, 0].filter(day => DEFAULT_TEMPLATE[day].some(item => item.muscle === muscle)); }
   function getPlanForDate(date) {
     const key = dateKey(date);
     const overrides = currentOverrides();
@@ -366,7 +371,7 @@
     plan.forEach(item => {
       const block = document.createElement("article");
       block.className = "muscle-block card";
-      const exercises = (state.exercises[item.muscle] || []).filter(exercise => exercise.active || getSessionRows(viewedDate, exercise.name).length);
+      const exercises = (state.exercises[item.muscle] || []).filter(exercise => (exercise.active && exerciseAppliesToDay(exercise, item.day)) || getSessionRows(viewedDate, exercise.name).length);
       const body = exercises.length
         ? exercises.map(exercise => renderExerciseCard(exercise)).join("")
         : `<p class="no-exercises-note">No hay ejercicios activos para ${MUSCLE_LABELS[item.muscle]}. Añade o activa alguno en la pestaña Ejercicios.</p>`;
@@ -444,7 +449,7 @@
     if (!requireEditing()) return;
     if (isDayCompleted(viewedDate) || isDayLocked(viewedDate)) { showToast("Ya has anotado datos este día; no se puede cambiar la rutina planificada."); return; }
     const weekday = Number($("#swap-select").value);
-    currentOverrides()[dateKey(viewedDate)] = DEFAULT_TEMPLATE[weekday].map(item => ({ ...item }));
+    currentOverrides()[dateKey(viewedDate)] = DEFAULT_TEMPLATE[weekday].map(item => ({ ...item, day: weekday }));
     renderRoutine();
     persist();
     showToast("Rutina intercambiada para este día. Pulsa Guardar para conservarlo.");
@@ -482,9 +487,10 @@
     exercises.forEach(exercise => {
       const card = document.createElement("article");
       card.className = `exercise-item${exercise.active ? "" : " inactive"}`;
-      card.innerHTML = `<div class="exercise-item-info"><div class="exercise-item-title">${escapeHtml(exercise.name)}${exercise.active ? "" : " <span class=\"inactive-badge\">Inactivo</span>"}</div><p class="exercise-item-meta">${exercise.sets} series × ${exercise.reps} repeticiones</p>${exercise.comment ? `<p class="exercise-item-comment">${escapeHtml(exercise.comment)}</p>` : ""}</div><div class="card-actions"><button class="mini-button exercise-toggle" type="button" data-id="${escapeHtml(exercise.id)}">${exercise.active ? "Desactivar" : "Activar"}</button><button class="mini-button exercise-edit" type="button" data-id="${escapeHtml(exercise.id)}" aria-label="Editar ${escapeHtml(exercise.name)}">Editar</button><button class="mini-button exercise-delete" type="button" data-id="${escapeHtml(exercise.id)}" aria-label="Eliminar ${escapeHtml(exercise.name)}">×</button></div>`;
+      card.innerHTML = `<div class="exercise-item-info"><div class="exercise-item-title">${escapeHtml(exercise.name)}${exercise.active ? "" : " <span class=\"inactive-badge\">Inactivo</span>"}</div><p class="exercise-item-meta">${exercise.sets} series × ${exercise.reps} repeticiones</p>${exercise.comment ? `<p class="exercise-item-comment">${escapeHtml(exercise.comment)}</p>` : ""}${exercise.active ? dayChipsHtml(exercise) : ""}</div><div class="card-actions"><button class="mini-button exercise-toggle" type="button" data-id="${escapeHtml(exercise.id)}">${exercise.active ? "Desactivar" : "Activar"}</button><button class="mini-button exercise-edit" type="button" data-id="${escapeHtml(exercise.id)}" aria-label="Editar ${escapeHtml(exercise.name)}">Editar</button><button class="mini-button exercise-delete" type="button" data-id="${escapeHtml(exercise.id)}" aria-label="Eliminar ${escapeHtml(exercise.name)}">×</button></div>`;
       list.append(card);
     });
+    $$(".day-chip").forEach(button => button.addEventListener("click", () => toggleExerciseDay(button.dataset.id, Number(button.dataset.day))));
     $$(".exercise-toggle").forEach(button => button.addEventListener("click", () => toggleExercise(button.dataset.id)));
     $$(".exercise-edit").forEach(button => button.addEventListener("click", () => editExercise(button.dataset.id)));
     $$(".exercise-delete").forEach(button => button.addEventListener("click", () => deleteExercise(button.dataset.id)));
@@ -514,6 +520,38 @@
     $("#save-exercise").textContent = "Guardar cambios";
     $("#cancel-exercise-edit").hidden = false;
     $("#exercise-form").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function dayChipsHtml(exercise) {
+    const days = trainingDaysFor(activeMuscle);
+    if (!days.length) return "";
+    const chips = days.map(day => `<button type="button" class="day-chip${exerciseAppliesToDay(exercise, day) ? " on" : ""}" data-id="${escapeHtml(exercise.id)}" data-day="${day}" aria-pressed="${exerciseAppliesToDay(exercise, day)}">${WEEKDAY_FULL[day].slice(0, 3)}</button>`).join("");
+    return `<div class="day-chips"><span class="muted-small">Días:</span>${chips}</div>`;
+  }
+
+  function toggleExerciseDay(exerciseId, day) {
+    if (!requireEditing()) return;
+    const exercise = exerciseById(activeMuscle, exerciseId);
+    if (!exercise) return;
+    const all = trainingDaysFor(activeMuscle);
+    const current = exercise.days ? exercise.days.filter(value => all.includes(value)) : all.slice();
+    const next = current.includes(day) ? current.filter(value => value !== day) : [...current, day];
+    exercise.days = next.length === all.length ? null : next;
+    renderExercises();
+    renderRoutine();
+    persist();
+  }
+
+  function renderDaySummary() {
+    const box = $("#day-summary");
+    const rows = [1, 2, 3, 4, 5].map(day => {
+      const parts = DEFAULT_TEMPLATE[day].map(item => {
+        const count = (state.exercises[item.muscle] || []).filter(exercise => exercise.active && exerciseAppliesToDay(exercise, day)).length;
+        return `${MUSCLE_LABELS[item.muscle]} ${count}`;
+      });
+      return `<li><strong>${WEEKDAY_FULL[day][0].toUpperCase()}${WEEKDAY_FULL[day].slice(1)}:</strong> ${parts.join(" · ")}</li>`;
+    });
+    box.innerHTML = `<strong>Ejercicios por día</strong><ul>${rows.join("")}</ul>`;
   }
 
   function toggleExercise(exerciseId) {
@@ -550,7 +588,7 @@
     const duplicate = state.exercises[activeMuscle].find(exercise => normalizeText(exercise.name) === normalizeText(name) && exercise.id !== editingId);
     if (duplicate) { showToast("Ya existe un ejercicio con ese nombre en este grupo muscular."); return; }
     const previous = editingId ? exerciseById(activeMuscle, editingId) : null;
-    const exercise = { id: editingId || id(), name, sets, reps, comment, active: previous ? previous.active : true };
+    const exercise = { id: editingId || id(), name, sets, reps, comment, active: previous ? previous.active : true, days: previous ? previous.days : null };
     const index = state.exercises[activeMuscle].findIndex(item => item.id === exercise.id);
     if (index >= 0) state.exercises[activeMuscle][index] = exercise;
     else state.exercises[activeMuscle].push(exercise);
@@ -561,7 +599,7 @@
     showToast(index >= 0 ? "Ejercicio actualizado. Pulsa Guardar para conservarlo." : "Ejercicio añadido. Pulsa Guardar para conservarlo.");
   }
 
-  function renderExercises() { renderMuscleTabs(); renderExerciseList(); }
+  function renderExercises() { renderMuscleTabs(); renderExerciseList(); renderDaySummary(); }
 
   function renderAll() { renderPersonTabs(); renderRoutine(); renderExercises(); enableEditing(canEdit()); }
 

@@ -52,3 +52,7 @@ El workflow `.github/workflows/pages.yml` publica la app en GitHub Pages en cada
 
 - En la pestaña Ejercicios puedes guardar todos los ejercicios que quieras y **activarlos/desactivarlos**: solo los activos aparecen en la rutina. Los inactivos conservan su histórico.
 - El botón **Día terminado** bloquea ese día (por persona) y ya no se puede modificar ni intercambiar.
+
+## Ejercicios por día
+
+Cada ejercicio activo muestra chips con los días de la semana en que toca su grupo muscular (p. ej. Espalda: lun y jue). Marca o desmarca los días para decidir en cuáles aparece; así puedes tener 4 ejercicios de espalda el lunes y 3 el jueves. Un cuadro resumen indica cuántos ejercicios hay por grupo y día. Por defecto, un ejercicio aparece en todos sus días.
