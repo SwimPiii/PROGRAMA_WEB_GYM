@@ -47,3 +47,8 @@ Eliminar un ejercicio de la pestaÃ±a Ejercicios no borra los datos ya registrado
 ## PublicaciÃ³n
 
 El workflow `.github/workflows/pages.yml` publica la app en GitHub Pages en cada push a `main`: `https://swimpiii.github.io/PROGRAMA_WEB_GYM/`. Requiere **Settings â†’ Pages â†’ Source: GitHub Actions**. El origen `https://swimpiii.github.io` ya estÃ¡ autorizado en el cliente OAuth de Google compartido con el resto de programas.
+
+## Ejercicios activos y días terminados
+
+- En la pestaña Ejercicios puedes guardar todos los ejercicios que quieras y **activarlos/desactivarlos**: solo los activos aparecen en la rutina. Los inactivos conservan su histórico.
+- El botón **Día terminado** bloquea ese día (por persona) y ya no se puede modificar ni intercambiar.

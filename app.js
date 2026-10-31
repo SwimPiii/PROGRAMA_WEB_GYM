@@ -70,7 +70,8 @@
         name: String(item.name).trim(),
         sets: Math.max(1, Math.round(Number(item.sets) || 1)),
         reps: Math.max(1, Math.round(Number(item.reps) || 1)),
-        comment: String(item.comment || "").trim()
+        comment: String(item.comment || "").trim(),
+        active: item.active !== false
       }));
     });
     const overrides = {};
@@ -109,7 +110,7 @@
             entries[name] = { rows };
           });
         }
-        sessions[key] = { entries };
+        sessions[key] = { entries, locked: !!(session && session.locked) };
       });
     }
     return sessions;
@@ -217,10 +218,12 @@
   function enableEditing(enabled) {
     const exerciseForm = $("#exercise-form");
     [...exerciseForm.elements].forEach(control => { control.disabled = !enabled; });
-    $("#swap-select").disabled = !enabled || isDayCompleted(viewedDate);
-    $("#swap-apply").disabled = !enabled || isDayCompleted(viewedDate);
+    const dayClosed = isDayCompleted(viewedDate) || isDayLocked(viewedDate);
+    $("#swap-select").disabled = !enabled || dayClosed;
+    $("#swap-apply").disabled = !enabled || dayClosed;
     $("#swap-reset").disabled = !enabled;
-    $$(".set-input, .exercise-edit, .exercise-delete").forEach(element => { element.disabled = !enabled; });
+    $$(".exercise-edit, .exercise-delete, .exercise-toggle, .finish-day").forEach(element => { element.disabled = !enabled; });
+    $$(".set-input").forEach(element => { element.disabled = !enabled || isDayLocked(viewedDate); });
     updateSaveButton();
   }
 
@@ -240,6 +243,11 @@
     const overrides = currentOverrides();
     if (overrides[key]) return overrides[key].map(item => ({ ...item }));
     return getDefaultPlan(date);
+  }
+
+  function isDayLocked(date) {
+    const session = currentSessions()[dateKey(date)];
+    return !!(session && session.locked);
   }
 
   function isDayCompleted(date) {
@@ -265,7 +273,8 @@
   function setSessionRow(date, exerciseName, rowIndex, field, value) {
     const key = dateKey(date);
     const sessions = currentSessions();
-    if (!sessions[key]) sessions[key] = { entries: {} };
+    if (sessions[key] && sessions[key].locked) return;
+    if (!sessions[key]) sessions[key] = { entries: {}, locked: false };
     const session = sessions[key];
     let entryKey = Object.keys(session.entries).find(name => normalizeText(name) === normalizeText(exerciseName));
     if (!entryKey) { entryKey = exerciseName; session.entries[entryKey] = { rows: [] }; }
@@ -328,19 +337,23 @@
   function renderRoutine() {
     const key = dateKey(viewedDate);
     const plan = getPlanForDate(viewedDate);
-    const completed = isDayCompleted(viewedDate);
+    const locked = isDayLocked(viewedDate);
+    const completed = isDayCompleted(viewedDate) || locked;
     const isToday = key === dateKey(todayAtMidnight());
 
     $("#day-label").textContent = formatDateLong(viewedDate);
     $("#day-sublabel").textContent = isToday ? "Hoy" : "";
     $("#swap-current-label").textContent = describePlan(plan);
-    $("#swap-hint").textContent = completed
+    $("#swap-hint").textContent = locked
+      ? "Día terminado y bloqueado: ya no se puede modificar."
+      : completed
       ? "Ya has anotado datos este día, así que no se puede cambiar la rutina planificada."
       : "Puedes cambiarla por la rutina de otro día si aún no has registrado nada hoy.";
     $("#swap-select").disabled = completed || !canEdit();
     $("#swap-apply").disabled = completed || !canEdit();
     $("#swap-reset").hidden = !currentOverrides()[key];
-    $("#swap-reset").disabled = !canEdit();
+    $("#swap-reset").disabled = !canEdit() || locked;
+    renderFinish(plan.length > 0, locked);
 
     const container = $("#routine-day");
     container.innerHTML = "";
@@ -353,15 +366,37 @@
     plan.forEach(item => {
       const block = document.createElement("article");
       block.className = "muscle-block card";
-      const exercises = state.exercises[item.muscle] || [];
+      const exercises = (state.exercises[item.muscle] || []).filter(exercise => exercise.active || getSessionRows(viewedDate, exercise.name).length);
       const body = exercises.length
         ? exercises.map(exercise => renderExerciseCard(exercise)).join("")
-        : `<p class="no-exercises-note">No hay ejercicios guardados para ${MUSCLE_LABELS[item.muscle]}. Añádelos en la pestaña Ejercicios.</p>`;
+        : `<p class="no-exercises-note">No hay ejercicios activos para ${MUSCLE_LABELS[item.muscle]}. Añade o activa alguno en la pestaña Ejercicios.</p>`;
       block.innerHTML = `<div class="muscle-block-header"><h3>${escapeHtml(MUSCLE_LABELS[item.muscle])}</h3><span class="intensity-badge intensity-${item.intensity}">${INTENSITY_LABELS[item.intensity]}</span></div><div class="muscle-block-body">${body}</div>`;
       container.append(block);
     });
 
     bindSetInputs();
+  }
+
+  function renderFinish(hasPlan, locked) {
+    const box = $("#day-finish");
+    if (!hasPlan) { box.innerHTML = ""; return; }
+    box.innerHTML = locked
+      ? `<div class="day-locked">Día terminado y bloqueado</div>`
+      : `<button class="button button-primary finish-day" id="finish-day" type="button">Día terminado</button><span class="muted-small">Al terminar, el día se bloquea y ya no se podrá modificar.</span>`;
+    const button = $("#finish-day");
+    if (button) { button.disabled = !canEdit(); button.addEventListener("click", finishDay); }
+  }
+
+  function finishDay() {
+    if (!requireEditing()) return;
+    if (!confirm("¿Dar por terminado este día? Se bloqueará y no podrás modificarlo nunca más.")) return;
+    const sessions = currentSessions();
+    const key = dateKey(viewedDate);
+    if (!sessions[key]) sessions[key] = { entries: {}, locked: true };
+    else sessions[key].locked = true;
+    renderRoutine();
+    persist();
+    showToast("Día terminado y bloqueado. Pulsa Guardar para conservarlo.");
   }
 
   function renderExerciseCard(exercise) {
@@ -375,8 +410,8 @@
       const row = loggedRows[index] || { weight: "", reps: "" };
       return `<div class="set-row">
         <span class="set-row-label">Serie ${index + 1}</span>
-        <div class="set-input-wrap"><input class="input set-input" type="number" min="0" step="any" inputmode="decimal" placeholder="Peso" data-date="${dateKey(viewedDate)}" data-name="${escapeHtml(exercise.name)}" data-index="${index}" data-field="weight" value="${escapeHtml(row.weight)}"><span>kg</span></div>
-        <div class="set-input-wrap"><input class="input set-input" type="number" min="0" step="1" inputmode="numeric" placeholder="Reps" data-date="${dateKey(viewedDate)}" data-name="${escapeHtml(exercise.name)}" data-index="${index}" data-field="reps" value="${escapeHtml(row.reps)}"><span>reps</span></div>
+        <div class="set-input-wrap"><input class="input set-input" type="number" min="0" step="any" inputmode="decimal" placeholder="Peso" data-date="${dateKey(viewedDate)}" data-name="${escapeHtml(exercise.name)}" data-index="${index}" data-field="weight"${isDayLocked(viewedDate) ? " disabled" : ""} value="${escapeHtml(row.weight)}"><span>kg</span></div>
+        <div class="set-input-wrap"><input class="input set-input" type="number" min="0" step="1" inputmode="numeric" placeholder="Reps" data-date="${dateKey(viewedDate)}" data-name="${escapeHtml(exercise.name)}" data-index="${index}" data-field="reps"${isDayLocked(viewedDate) ? " disabled" : ""} value="${escapeHtml(row.reps)}"><span>reps</span></div>
       </div>`;
     }).join("");
     return `<div class="exercise-card">
@@ -389,7 +424,7 @@
 
   function bindSetInputs() {
     $$(".set-input").forEach(input => {
-      input.disabled = !canEdit();
+      input.disabled = !canEdit() || isDayLocked(viewedDate);
       input.addEventListener("input", () => {
         if (!requireEditing()) { input.value = ""; return; }
         const { date, name, index, field } = input.dataset;
@@ -407,7 +442,7 @@
 
   function applySwap() {
     if (!requireEditing()) return;
-    if (isDayCompleted(viewedDate)) { showToast("Ya has anotado datos este día; no se puede cambiar la rutina planificada."); return; }
+    if (isDayCompleted(viewedDate) || isDayLocked(viewedDate)) { showToast("Ya has anotado datos este día; no se puede cambiar la rutina planificada."); return; }
     const weekday = Number($("#swap-select").value);
     currentOverrides()[dateKey(viewedDate)] = DEFAULT_TEMPLATE[weekday].map(item => ({ ...item }));
     renderRoutine();
@@ -416,7 +451,7 @@
   }
 
   function resetSwap() {
-    if (!requireEditing()) return;
+    if (!requireEditing() || isDayLocked(viewedDate)) return;
     delete currentOverrides()[dateKey(viewedDate)];
     renderRoutine();
     persist();
@@ -439,17 +474,18 @@
 
   function renderExerciseList() {
     const list = $("#exercise-list");
-    const exercises = (state.exercises[activeMuscle] || []).slice().sort((a, b) => a.name.localeCompare(b.name, "es"));
+    const exercises = (state.exercises[activeMuscle] || []).slice().sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name, "es"));
     $("#exercise-list-title").textContent = `Ejercicios · ${MUSCLE_LABELS[activeMuscle]}`;
-    $("#exercise-summary").textContent = `${exercises.length} ${exercises.length === 1 ? "ejercicio guardado" : "ejercicios guardados"}`;
+    $("#exercise-summary").textContent = `${exercises.length} guardados · ${exercises.filter(exercise => exercise.active).length} activos en la rutina`;
     list.innerHTML = "";
     if (!exercises.length) { list.innerHTML = `<div class="empty-state"><strong>Aún no hay ejercicios para ${MUSCLE_LABELS[activeMuscle]}</strong>Añade el primero con el formulario.</div>`; return; }
     exercises.forEach(exercise => {
       const card = document.createElement("article");
-      card.className = "exercise-item";
-      card.innerHTML = `<div class="exercise-item-info"><div class="exercise-item-title">${escapeHtml(exercise.name)}</div><p class="exercise-item-meta">${exercise.sets} series × ${exercise.reps} repeticiones</p>${exercise.comment ? `<p class="exercise-item-comment">${escapeHtml(exercise.comment)}</p>` : ""}</div><div class="card-actions"><button class="mini-button exercise-edit" type="button" data-id="${escapeHtml(exercise.id)}" aria-label="Editar ${escapeHtml(exercise.name)}">Editar</button><button class="mini-button exercise-delete" type="button" data-id="${escapeHtml(exercise.id)}" aria-label="Eliminar ${escapeHtml(exercise.name)}">×</button></div>`;
+      card.className = `exercise-item${exercise.active ? "" : " inactive"}`;
+      card.innerHTML = `<div class="exercise-item-info"><div class="exercise-item-title">${escapeHtml(exercise.name)}${exercise.active ? "" : " <span class=\"inactive-badge\">Inactivo</span>"}</div><p class="exercise-item-meta">${exercise.sets} series × ${exercise.reps} repeticiones</p>${exercise.comment ? `<p class="exercise-item-comment">${escapeHtml(exercise.comment)}</p>` : ""}</div><div class="card-actions"><button class="mini-button exercise-toggle" type="button" data-id="${escapeHtml(exercise.id)}">${exercise.active ? "Desactivar" : "Activar"}</button><button class="mini-button exercise-edit" type="button" data-id="${escapeHtml(exercise.id)}" aria-label="Editar ${escapeHtml(exercise.name)}">Editar</button><button class="mini-button exercise-delete" type="button" data-id="${escapeHtml(exercise.id)}" aria-label="Eliminar ${escapeHtml(exercise.name)}">×</button></div>`;
       list.append(card);
     });
+    $$(".exercise-toggle").forEach(button => button.addEventListener("click", () => toggleExercise(button.dataset.id)));
     $$(".exercise-edit").forEach(button => button.addEventListener("click", () => editExercise(button.dataset.id)));
     $$(".exercise-delete").forEach(button => button.addEventListener("click", () => deleteExercise(button.dataset.id)));
     enableEditing(canEdit());
@@ -480,12 +516,24 @@
     $("#exercise-form").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function toggleExercise(exerciseId) {
+    if (!requireEditing()) return;
+    const exercise = exerciseById(activeMuscle, exerciseId);
+    if (!exercise) return;
+    exercise.active = !exercise.active;
+    renderExercises();
+    renderRoutine();
+    persist();
+    showToast(exercise.active ? "Ejercicio activado en la rutina." : "Ejercicio desactivado; su histórico se conserva.");
+  }
+
   async function deleteExercise(exerciseId) {
     if (!requireEditing()) return;
     const exercise = exerciseById(activeMuscle, exerciseId);
-    if (!exercise || !confirm(`¿Eliminar «${exercise.name}»? No afectará a los datos ya registrados en días anteriores.`)) return;
+    if (!exercise || !confirm(`¿Eliminar «${exercise.name}»? Mejor desactívalo si quieres volver a usarlo. No afectará a los datos ya registrados en días anteriores.`)) return;
     state.exercises[activeMuscle] = state.exercises[activeMuscle].filter(item => item.id !== exerciseId);
     renderExercises();
+    renderRoutine();
     await persist();
     showToast("Ejercicio eliminado.");
   }
@@ -501,12 +549,14 @@
     const editingId = $("#exercise-id").value;
     const duplicate = state.exercises[activeMuscle].find(exercise => normalizeText(exercise.name) === normalizeText(name) && exercise.id !== editingId);
     if (duplicate) { showToast("Ya existe un ejercicio con ese nombre en este grupo muscular."); return; }
-    const exercise = { id: editingId || id(), name, sets, reps, comment };
+    const previous = editingId ? exerciseById(activeMuscle, editingId) : null;
+    const exercise = { id: editingId || id(), name, sets, reps, comment, active: previous ? previous.active : true };
     const index = state.exercises[activeMuscle].findIndex(item => item.id === exercise.id);
     if (index >= 0) state.exercises[activeMuscle][index] = exercise;
     else state.exercises[activeMuscle].push(exercise);
     resetExerciseForm();
     renderExercises();
+    renderRoutine();
     await persist();
     showToast(index >= 0 ? "Ejercicio actualizado. Pulsa Guardar para conservarlo." : "Ejercicio añadido. Pulsa Guardar para conservarlo.");
   }

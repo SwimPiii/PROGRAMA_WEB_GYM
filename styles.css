@@ -162,3 +162,8 @@ textarea.input{height:auto;resize:vertical}
   .muscle-block-header{padding:12px 14px}
   .muscle-block-body{padding:11px 14px 14px}
 }
+
+.day-finish { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+.day-locked { padding: 10px 16px; border-radius: 8px; background: #e2e8f0; color: #1a202c; font-weight: 600; }
+.exercise-item.inactive { opacity: .6; }
+.inactive-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: #e2e8f0; color: #4a5568; font-size: 11px; font-weight: 600; vertical-align: middle; }
