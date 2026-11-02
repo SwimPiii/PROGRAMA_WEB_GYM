@@ -246,6 +246,10 @@
 
   async function load() {
     if (!state.signedIn) throw new Error("Conecta con Google Drive para cargar los datos.");
+    if (!state.fileId) {
+      const existing = await findFile(await resolveFolder(), cfg.driveFileName);
+      state.fileId = existing ? existing.id : null;
+    }
     if (!state.fileId) return { version: 1, exercises: {}, overrides: {}, sessions: {}, lastUpdated: null };
     const response = await window.gapi.client.drive.files.get({ fileId: state.fileId, alt: "media" });
     const data = response.result;

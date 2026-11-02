@@ -56,3 +56,7 @@ El workflow `.github/workflows/pages.yml` publica la app en GitHub Pages en cada
 ## Ejercicios por día
 
 Cada ejercicio activo muestra chips con los días de la semana en que toca su grupo muscular (p. ej. Espalda: lun y jue). Marca o desmarca los días para decidir en cuáles aparece; así puedes tener 4 ejercicios de espalda el lunes y 3 el jueves. Un cuadro resumen indica cuántos ejercicios hay por grupo y día. Por defecto, un ejercicio aparece en todos sus días.
+
+## Uso simultáneo (Ismael y David)
+
+Al pulsar **Guardar**, la app vuelve a leer Drive y fusiona: solo sobrescribe los días que tú has tocado en tu pestaña; los datos de la otra persona y los ejercicios añadidos por ella se conservan. Un día bloqueado con **Día terminado** en Drive nunca se sobrescribe. Para compartir la carpeta de Drive con otra cuenta, compártela desde Drive como Editor y, si la app OAuth está en modo *Testing*, añade esa cuenta como usuario de prueba en Google Cloud (Pantalla de consentimiento).

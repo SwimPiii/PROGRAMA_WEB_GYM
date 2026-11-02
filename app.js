@@ -30,6 +30,33 @@
   let activeMuscle = MUSCLES[0];
   let activePerson = PEOPLE[0];
   let toastTimer;
+  // Días tocados por persona desde la última sincronización, e ids de ejercicios borrados.
+  // Al guardar solo se envían esos días; el resto se conserva tal cual está en Drive.
+  const touched = Object.fromEntries(PEOPLE.map(person => [person, new Set()]));
+  const deletedExerciseIds = new Set();
+  function touch(date) { touched[activePerson].add(dateKey(date)); }
+
+  function mergeWithRemote(remoteRaw) {
+    const remote = normalizeState(remoteRaw);
+    const merged = normalizeState(JSON.parse(JSON.stringify(remote)));
+    MUSCLES.forEach(muscle => {
+      const byId = new Map(remote.exercises[muscle].filter(item => !deletedExerciseIds.has(item.id)).map(item => [item.id, item]));
+      state.exercises[muscle].forEach(item => byId.set(item.id, item));
+      merged.exercises[muscle] = [...byId.values()];
+    });
+    PEOPLE.forEach(person => {
+      touched[person].forEach(key => {
+        const remoteDay = remote.sessions[person][key];
+        if (remoteDay && remoteDay.locked) return;
+        const localDay = state.sessions[person][key];
+        if (localDay) merged.sessions[person][key] = localDay; else delete merged.sessions[person][key];
+        const localPlan = state.overrides[person][key];
+        if (localPlan) merged.overrides[person][key] = localPlan; else delete merged.overrides[person][key];
+      });
+    });
+    merged.lastUpdated = new Date().toISOString();
+    return merged;
+  }
 
   function emptyState() {
     const exercises = {};
@@ -129,13 +156,27 @@
     if (!requireEditing() || saving) return false;
     if (!dirty) { showToast("No hay cambios pendientes para guardar."); return true; }
     saving = true;
-    state.lastUpdated = new Date().toISOString();
-    const snapshot = JSON.stringify(state);
     setStatus("Guardando…", "busy");
     updateSaveButton();
     try {
-      if (demoMode && !connected()) localStorage.setItem(DEMO_STORAGE_KEY, snapshot);
-      else await window.gymDrive.save(JSON.parse(snapshot));
+      const local = demoMode && !connected();
+      let snapshot;
+      if (local) {
+        state.lastUpdated = new Date().toISOString();
+        snapshot = JSON.stringify(state);
+        localStorage.setItem(DEMO_STORAGE_KEY, snapshot);
+      } else {
+        // Se vuelve a leer Drive justo antes de guardar para no pisar lo que haya guardado la otra persona.
+        const remote = await window.gymDrive.load();
+        const before = JSON.stringify(state);
+        const merged = mergeWithRemote(remote);
+        state = merged;
+        snapshot = JSON.stringify(state);
+        if (JSON.stringify({ ...JSON.parse(before), lastUpdated: null }) !== JSON.stringify({ ...JSON.parse(snapshot), lastUpdated: null })) renderAll();
+        await window.gymDrive.save(JSON.parse(snapshot));
+        PEOPLE.forEach(person => touched[person].clear());
+        deletedExerciseIds.clear();
+      }
       dirty = JSON.stringify(state) !== snapshot;
       setStatus(dirty ? "Hay cambios sin guardar" : demoMode && !connected() ? "Modo prueba · guardado local" : "Guardado en Drive", dirty ? "" : "connected");
       showToast(dirty ? "Se guardó una parte; quedan cambios pendientes." : demoMode && !connected() ? "Guardado en este navegador (modo prueba)." : "Guardado en Google Drive.");
@@ -279,6 +320,7 @@
     const key = dateKey(date);
     const sessions = currentSessions();
     if (sessions[key] && sessions[key].locked) return;
+    touch(date);
     if (!sessions[key]) sessions[key] = { entries: {}, locked: false };
     const session = sessions[key];
     let entryKey = Object.keys(session.entries).find(name => normalizeText(name) === normalizeText(exerciseName));
@@ -397,6 +439,7 @@
     if (!confirm("¿Dar por terminado este día? Se bloqueará y no podrás modificarlo nunca más.")) return;
     const sessions = currentSessions();
     const key = dateKey(viewedDate);
+    touch(viewedDate);
     if (!sessions[key]) sessions[key] = { entries: {}, locked: true };
     else sessions[key].locked = true;
     renderRoutine();
@@ -449,6 +492,7 @@
     if (!requireEditing()) return;
     if (isDayCompleted(viewedDate) || isDayLocked(viewedDate)) { showToast("Ya has anotado datos este día; no se puede cambiar la rutina planificada."); return; }
     const weekday = Number($("#swap-select").value);
+    touch(viewedDate);
     currentOverrides()[dateKey(viewedDate)] = DEFAULT_TEMPLATE[weekday].map(item => ({ ...item, day: weekday }));
     renderRoutine();
     persist();
@@ -457,6 +501,7 @@
 
   function resetSwap() {
     if (!requireEditing() || isDayLocked(viewedDate)) return;
+    touch(viewedDate);
     delete currentOverrides()[dateKey(viewedDate)];
     renderRoutine();
     persist();
@@ -569,6 +614,7 @@
     if (!requireEditing()) return;
     const exercise = exerciseById(activeMuscle, exerciseId);
     if (!exercise || !confirm(`¿Eliminar «${exercise.name}»? Mejor desactívalo si quieres volver a usarlo. No afectará a los datos ya registrados en días anteriores.`)) return;
+    deletedExerciseIds.add(exerciseId);
     state.exercises[activeMuscle] = state.exercises[activeMuscle].filter(item => item.id !== exerciseId);
     renderExercises();
     renderRoutine();
