@@ -173,3 +173,27 @@ textarea.input{height:auto;resize:vertical}
 .day-chip.on { background: #2a4365; border-color: #2a4365; color: #fff; }
 .day-summary { padding: 14px 16px; margin-bottom: 16px; font-size: 14px; }
 .day-summary ul { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+
+.exercise-card-actions{display:flex;align-items:center;gap:8px}
+.progress-button{color:var(--accent);font-weight:600;white-space:nowrap}
+.progress-dialog{width:min(760px,94vw);max-height:88vh;overflow:auto;padding:22px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);box-shadow:0 24px 70px #0004}
+.progress-dialog::backdrop{background:rgba(15,23,42,.58)}
+.progress-dialog h3{margin:4px 0 16px;font:700 19px Inter,sans-serif}
+.progress-dialog>button{margin-top:16px}
+.progress-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.progress-metrics>div{display:grid;gap:4px;padding:12px;border:1px solid var(--line);border-radius:8px;background:#fbfbfc}
+.progress-metrics span{font-size:10px;color:var(--muted)}
+.progress-metrics strong{font-size:17px}
+.progress-controls{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.progress-metric.active{background:var(--accent);color:#fff}
+.progress-chart{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:#fbfbfc}
+.progress-chart svg{display:block;width:100%;min-width:420px;height:auto}
+.chart-axis{stroke:#d9dee7;stroke-width:1}
+.chart-label{fill:var(--muted);font:10px Inter,sans-serif}
+.progress-note{font-size:10px;color:var(--muted);line-height:1.55}
+.progress-table-wrap{overflow:auto}
+.progress-table{width:100%;border-collapse:collapse;font-size:11px}
+.progress-table th,.progress-table td{padding:8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+.progress-table th:first-child,.progress-table td:first-child{text-align:left}
+.progress-table th{color:var(--muted);font-weight:600}
+@media(max-width:680px){.exercise-card-actions{gap:4px}.progress-dialog{padding:16px}.progress-metrics strong{font-size:15px}}

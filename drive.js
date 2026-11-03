@@ -1,6 +1,6 @@
 (function () {
   const cfg = window.GYM_CONFIG || {};
-  const state = { initialized: false, signedIn: false, folderId: cfg.driveFolderId || null, fileId: null, lastError: null };
+  const state = { initialized: false, signedIn: false, folderId: cfg.driveFolderId || null, folderVerified: false, fileId: null, lastError: null };
   let tokenClient = null;
   const BACKUP_SLOTS = 5;
 
@@ -31,21 +31,64 @@
   function quote(value) { return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'"); }
 
   async function resolveFolder() {
+    if (state.folderId && state.folderVerified) return state.folderId;
     if (state.folderId) {
       try {
         const folder = await window.gapi.client.drive.files.get({ fileId: state.folderId, fields: "id,mimeType" });
-        if (folder.result.mimeType === "application/vnd.google-apps.folder") return state.folderId;
+        if (folder.result.mimeType === "application/vnd.google-apps.folder") {
+          state.folderVerified = true;
+          return state.folderId;
+        }
       } catch (error) { state.lastError = error; }
     }
     const query = `name='${quote(cfg.driveFolderName)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
     const result = await window.gapi.client.drive.files.list({ q: query, pageSize: 10, fields: "files(id,name)" });
     if (result.result.files && result.result.files.length) {
       state.folderId = result.result.files[0].id;
+      state.folderVerified = true;
       return state.folderId;
     }
     const created = await window.gapi.client.drive.files.create({ resource: { name: cfg.driveFolderName, mimeType: "application/vnd.google-apps.folder" }, fields: "id" });
     state.folderId = created.result.id;
+    state.folderVerified = true;
     return state.folderId;
+  }
+
+  function isUnauthorized(error) {
+    return Number(error && (error.status || error.result && error.result.error && error.result.error.code)) === 401;
+  }
+
+  async function refreshAccessToken() {
+    await init();
+    const client = getTokenClient();
+    return new Promise((resolve, reject) => {
+      client.callback = response => {
+        if (!response || !response.access_token) {
+          state.signedIn = false;
+          reject(new Error("La sesión de Google ha caducado. Pulsa «Conectar Drive» para volver a autorizar."));
+          return;
+        }
+        window.gapi.client.setToken({ access_token: response.access_token });
+        state.signedIn = true;
+        resolve();
+      };
+      client.error_callback = error => {
+        state.lastError = error;
+        state.signedIn = false;
+        reject(new Error("La sesión de Drive necesita autorización. Pulsa «Conectar Drive» para continuar."));
+      };
+      try { client.requestAccessToken({ prompt: "none", hint: cfg.googleAccountHint }); }
+      catch (error) { reject(error); }
+    });
+  }
+
+  async function withAuthRetry(operation) {
+    try { return await operation(); }
+    catch (error) {
+      if (!isUnauthorized(error)) throw error;
+      await refreshAccessToken();
+      return operation();
+    }
   }
 
   async function findFile(folderId, name) {
@@ -211,7 +254,7 @@
           resolve(data);
         } catch (error) { state.lastError = error; state.signedIn = false; reject(error); }
       };
-      try { client.requestAccessToken({ prompt: "consent", hint: cfg.googleAccountHint }); }
+      try { client.requestAccessToken({ prompt: "", hint: cfg.googleAccountHint }); }
       catch (error) { reject(error); }
     });
   }
@@ -246,29 +289,40 @@
 
   async function load() {
     if (!state.signedIn) throw new Error("Conecta con Google Drive para cargar los datos.");
-    if (!state.fileId) {
-      const existing = await findFile(await resolveFolder(), cfg.driveFileName);
-      state.fileId = existing ? existing.id : null;
-    }
-    if (!state.fileId) return { version: 1, exercises: {}, overrides: {}, sessions: {}, lastUpdated: null };
-    const response = await window.gapi.client.drive.files.get({ fileId: state.fileId, alt: "media" });
-    const data = response.result;
-    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("El archivo de datos de Drive no tiene un formato válido.");
-    return data;
+    return withAuthRetry(async () => {
+      if (!state.fileId) {
+        const existing = await findFile(await resolveFolder(), cfg.driveFileName);
+        state.fileId = existing ? existing.id : null;
+      }
+      if (!state.fileId) return { version: 1, exercises: {}, overrides: {}, sessions: {}, lastUpdated: null };
+      const response = await window.gapi.client.drive.files.get({ fileId: state.fileId, alt: "media" });
+      const data = response.result;
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("El archivo de datos de Drive no tiene un formato válido.");
+      return data;
+    });
   }
 
   async function save(payload) {
     if (!state.signedIn) throw new Error("Conecta con Google Drive antes de guardar.");
-    const folderId = await resolveFolder();
-    if (!state.fileId) {
-      const existing = await findFile(folderId, cfg.driveFileName);
-      state.fileId = existing ? existing.id : null;
-      if (!state.fileId) state.fileId = await createJson(folderId, cfg.driveFileName, JSON.stringify(payload));
-      else await upload(state.fileId, JSON.stringify(payload), cfg.driveFileName);
-    } else {
-      await upload(state.fileId, JSON.stringify(payload), cfg.driveFileName);
-    }
-    await saveBackup(payload, folderId);
+    return withAuthRetry(async () => {
+      const folderId = await resolveFolder();
+      if (!state.fileId) {
+        const existing = await findFile(folderId, cfg.driveFileName);
+        state.fileId = existing ? existing.id : null;
+        if (!state.fileId) state.fileId = await createJson(folderId, cfg.driveFileName, JSON.stringify(payload));
+        else await upload(state.fileId, JSON.stringify(payload), cfg.driveFileName);
+      } else {
+        await upload(state.fileId, JSON.stringify(payload), cfg.driveFileName);
+      }
+    });
+  }
+
+  async function createBackup(payload) {
+    if (!state.signedIn) throw new Error("Conecta con Google Drive para crear la copia.");
+    await withAuthRetry(async () => {
+      const folderId = await resolveFolder();
+      await saveBackup(payload, folderId);
+    });
   }
 
   async function signOut() {
@@ -282,5 +336,5 @@
     }
   }
 
-  window.gymDrive = { signIn, trySilentSignIn, signOut, load, save, isSignedIn: () => state.signedIn, getDebugInfo: () => ({ folderId: state.folderId, fileId: state.fileId, lastError: state.lastError }) };
+  window.gymDrive = { signIn, trySilentSignIn, signOut, load, save, saveBackup: createBackup, isSignedIn: () => state.signedIn, getDebugInfo: () => ({ folderId: state.folderId, fileId: state.fileId, lastError: state.lastError }) };
 })();

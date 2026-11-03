@@ -37,7 +37,7 @@
 
       <section class="panel active" id="panel-rutina" role="tabpanel" aria-labelledby="tab-rutina">
         <div class="section-heading plan-heading">
-          <div><h2>Rutina</h2><p class="section-copy">Entrenamiento del día, con el peso y las repeticiones de la última vez para intentar superarte.</p></div>
+          <div><h2>Rutina</h2><p class="section-copy">Entrenamiento del día, con el peso y las repeticiones de la última vez para intentar superarte. Los cambios se guardan en este dispositivo y se sincronizan con Drive.</p></div>
         </div>
 
           <div class="person-tabs" id="person-tabs" role="tablist" aria-label="Selecciona quién entrena"></div>
@@ -90,6 +90,10 @@
         </div>
       </section>
     </main>
+    <dialog class="progress-dialog" id="progress-dialog" aria-labelledby="progress-dialog-title">
+      <div id="progress-dialog-body"></div>
+      <button class="button button-outline" id="progress-dialog-close" type="button">Cerrar</button>
+    </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </div>
 </body>

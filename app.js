@@ -2,6 +2,7 @@
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
   const DEMO_STORAGE_KEY = "gym-rutina-demo-v1";
+  const LOCAL_CACHE_KEY = "gym-rutina-cache-v2";
 
   const MUSCLES = ["PECHO", "BICEPS", "ESPALDA", "TRICEPS", "HOMBRO", "PIERNA"];
   const MUSCLE_LABELS = { PECHO: "Pecho", BICEPS: "Bíceps", ESPALDA: "Espalda", TRICEPS: "Tríceps", HOMBRO: "Hombro", PIERNA: "Pierna" };
@@ -30,6 +31,17 @@
   let activeMuscle = MUSCLES[0];
   let activePerson = PEOPLE[0];
   let toastTimer;
+  let localCacheReady = false;
+  let localSaveTimer = null;
+  let changeRevision = 0;
+  let cloudRetryAfter = 0;
+  let cloudRetryMs = 30000;
+  let progressMetric = "estimated1RM";
+  const PROGRESS_METRICS = {
+    estimated1RM: { label: "1RM estimado", unit: "kg", color: "#2a4365" },
+    maxWeight: { label: "Peso máximo", unit: "kg", color: "#1f7a4d" },
+    volume: { label: "Volumen", unit: "kg·reps", color: "#b7791f" }
+  };
   // Días tocados por persona desde la última sincronización, e ids de ejercicios borrados.
   // Al guardar solo se envían esos días; el resto se conserva tal cual está en Drive.
   const touched = Object.fromEntries(PEOPLE.map(person => [person, new Set()]));
@@ -58,6 +70,69 @@
     return merged;
   }
 
+  function exerciseHistory(exerciseName) {
+    const normalized = normalizeText(exerciseName);
+    return Object.entries(currentSessions()).map(([key, session]) => {
+      const entry = Object.entries(session.entries).find(([name]) => normalizeText(name) === normalized);
+      if (!entry) return null;
+      const sets = entry[1].rows.map(row => ({ weight: Number(row.weight), reps: Number(row.reps) }))
+        .filter(row => Number.isFinite(row.weight) && row.weight > 0 && Number.isFinite(row.reps) && row.reps > 0);
+      if (!sets.length) return null;
+      const date = new Date(`${key}T00:00:00`);
+      const estimates = sets.filter(row => row.reps <= 12).map(row => row.weight * (1 + row.reps / 30));
+      return {
+        key,
+        date,
+        sets: sets.length,
+        maxWeight: Math.max(...sets.map(row => row.weight)),
+        volume: sets.reduce((sum, row) => sum + row.weight * row.reps, 0),
+        estimated1RM: estimates.length ? Math.max(...estimates) : null
+      };
+    }).filter(Boolean).sort((a, b) => a.date - b.date);
+  }
+
+  function openProgress(exerciseName) {
+    const workouts = exerciseHistory(exerciseName);
+    const metric = PROGRESS_METRICS[progressMetric];
+    const chartWorkouts = workouts.filter(workout => Number.isFinite(workout[progressMetric]) && workout[progressMetric] > 0);
+    const values = chartWorkouts.map(workout => workout[progressMetric]);
+    const chartWidth = 680, chartHeight = 230, left = 44, right = 18, top = 24, bottom = 38;
+    const min = values.length ? Math.min(...values) : 0;
+    const max = values.length ? Math.max(...values) : 0;
+    const span = max - min || 1;
+    const points = values.map((value, index) => {
+      const x = values.length === 1 ? chartWidth / 2 : left + index * (chartWidth - left - right) / (values.length - 1);
+      const y = top + (max - value) * (chartHeight - top - bottom) / span;
+      return { x, y, value, workout: chartWorkouts[index] };
+    });
+    const polyline = points.map(point => `${point.x},${point.y}`).join(" ");
+    const circles = points.map(point => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="${metric.color}"><title>${formatDateShort(point.workout.date)}: ${formatProgressValue(point.value, metric)}</title></circle>`).join("");
+    const axis = values.length === 1
+      ? `<text x="${chartWidth / 2}" y="${chartHeight - 8}" text-anchor="middle" class="chart-label">${formatDateShort(chartWorkouts[0].date)}</text>`
+      : values.length > 1
+      ? `<text x="${left}" y="${chartHeight - 8}" class="chart-label">${formatDateShort(chartWorkouts[0].date)}</text><text x="${chartWidth - right}" y="${chartHeight - 8}" text-anchor="end" class="chart-label">${formatDateShort(chartWorkouts[chartWorkouts.length - 1].date)}</text>`
+      : "";
+    const latest = chartWorkouts[chartWorkouts.length - 1];
+    const best = chartWorkouts.reduce((result, workout) => workout[progressMetric] > (result ? result[progressMetric] : -Infinity) ? workout : result, null);
+    const tableRows = workouts.slice().reverse().slice(0, 12).map(workout => `<tr><td>${formatDateShort(workout.date)}</td><td>${formatProgressValue(workout.maxWeight, PROGRESS_METRICS.maxWeight)}</td><td>${formatProgressValue(workout.volume, PROGRESS_METRICS.volume)}</td><td>${workout.estimated1RM ? formatProgressValue(workout.estimated1RM, PROGRESS_METRICS.estimated1RM) : "—"}</td></tr>`).join("");
+    $("#progress-dialog-body").innerHTML = `<span class="muted-small">${PERSON_LABELS[activePerson]} · ${workouts.length} entrenamientos registrados</span>
+      <h3 id="progress-dialog-title">${escapeHtml(exerciseName)}</h3>
+      <div class="progress-metrics"><div><span>Último ${metric.label.toLowerCase()}</span><strong>${latest ? formatProgressValue(latest[progressMetric], metric) : "—"}</strong></div><div><span>Mejor ${metric.label.toLowerCase()}</span><strong>${best ? formatProgressValue(best[progressMetric], metric) : "—"}</strong></div></div>
+      <div class="progress-controls">${Object.entries(PROGRESS_METRICS).map(([key, item]) => `<button type="button" class="mini-button progress-metric${key === progressMetric ? " active" : ""}" data-metric="${key}">${item.label}</button>`).join("")}</div>
+      ${workouts.length ? `<div class="progress-chart"><svg viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="${metric.label} por entrenamiento"><line x1="${left}" y1="${chartHeight - bottom}" x2="${chartWidth - right}" y2="${chartHeight - bottom}" class="chart-axis"/><line x1="${left}" y1="${top}" x2="${left}" y2="${chartHeight - bottom}" class="chart-axis"/>${points.length > 1 ? `<polyline points="${polyline}" fill="none" stroke="${metric.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>` : ""}${circles}${axis}</svg></div>
+      <p class="progress-note">El 1RM es una estimación deportiva calculada con la fórmula de Epley (solo series de hasta 12 repeticiones). Volumen = suma de kg × repeticiones de las series anotadas.</p>
+      <div class="progress-table-wrap"><table class="progress-table"><thead><tr><th>Fecha</th><th>Peso máx.</th><th>Volumen</th><th>1RM est.</th></tr></thead><tbody>${tableRows}</tbody></table></div>` : `<div class="empty-state"><strong>Aún no hay sesiones para este ejercicio</strong>Al guardar pesos y repeticiones, aquí verás la evolución.</div>`}`;
+    $$(".progress-metric").forEach(button => button.addEventListener("click", () => {
+      progressMetric = button.dataset.metric;
+      openProgress(exerciseName);
+    }));
+    if (!$("#progress-dialog").open) $("#progress-dialog").showModal();
+  }
+
+  function formatProgressValue(value, metric) {
+    return `${new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 }).format(value)} ${metric.unit}`;
+  }
+
   function emptyState() {
     const exercises = {};
     MUSCLES.forEach(muscle => { exercises[muscle] = []; });
@@ -76,7 +151,7 @@
   function showToast(message) { const toast = $("#toast"); toast.textContent = message; toast.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("show"), 2900); }
   function setStatus(text, mode = "") { $("#sync-label").textContent = text; $("#sync-status").className = `sync-status ${mode}`; }
   function connected() { return window.gymDrive && window.gymDrive.isSignedIn(); }
-  function canEdit() { return connected() || demoMode; }
+  function canEdit() { return connected() || demoMode || localCacheReady; }
   function requireEditing() { if (canEdit()) return true; showToast("Pulsa «Probar sin Drive» o conecta Google Drive para empezar."); return false; }
 
   function updateSaveButton() {
@@ -147,44 +222,123 @@
   function persist() {
     if (!requireEditing()) return false;
     dirty = true;
-    setStatus(demoMode && !connected() ? "Prueba · cambios sin guardar" : "Cambios sin guardar");
+    changeRevision += 1;
+    scheduleLocalSave();
+    setStatus(connected() ? "Cambios pendientes de Drive" : demoMode ? "Prueba · cambios sin guardar" : "Guardado local · pendiente de Drive");
     updateSaveButton();
     return true;
   }
 
-  async function saveChanges() {
+  function cachePayload() {
+    return {
+      state,
+      touched: Object.fromEntries(PEOPLE.map(person => [person, [...touched[person]]])),
+      deletedExerciseIds: [...deletedExerciseIds],
+      savedAt: new Date().toISOString()
+    };
+  }
+
+  function writeLocalCache() {
+    if (!localCacheReady && !canEdit()) return;
+    try {
+      localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(cachePayload()));
+      localCacheReady = true;
+    } catch (error) {
+      console.error("No se pudo guardar la copia local", error);
+      setStatus("No se pudo guardar localmente");
+    }
+  }
+
+  function scheduleLocalSave() {
+    clearTimeout(localSaveTimer);
+    localSaveTimer = setTimeout(writeLocalCache, 250);
+  }
+
+  function restoreLocalCache() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(LOCAL_CACHE_KEY) || "null");
+      if (!cached || !cached.state) return false;
+      state = normalizeState(cached.state);
+      PEOPLE.forEach(person => {
+        touched[person] = new Set(Array.isArray(cached.touched && cached.touched[person]) ? cached.touched[person] : []);
+      });
+      (Array.isArray(cached.deletedExerciseIds) ? cached.deletedExerciseIds : []).forEach(exerciseId => deletedExerciseIds.add(String(exerciseId)));
+      localCacheReady = true;
+      dirty = PEOPLE.some(person => touched[person].size) || deletedExerciseIds.size > 0;
+      return true;
+    } catch (error) {
+      console.warn("No se pudo recuperar el borrador local", error);
+      return false;
+    }
+  }
+
+  async function saveChanges(options = {}) {
     if (!requireEditing() || saving) return false;
+    if (options.automatic && Date.now() < cloudRetryAfter) return false;
+    writeLocalCache();
     if (!dirty) { showToast("No hay cambios pendientes para guardar."); return true; }
+    if (!connected()) {
+      showToast("Cambios guardados en este dispositivo. Conecta Drive para sincronizarlos.");
+      return true;
+    }
     saving = true;
     setStatus("Guardando…", "busy");
     updateSaveButton();
+    const revisionAtStart = changeRevision;
     try {
-      const local = demoMode && !connected();
-      let snapshot;
-      if (local) {
+      if (demoMode && !connected()) {
         state.lastUpdated = new Date().toISOString();
-        snapshot = JSON.stringify(state);
-        localStorage.setItem(DEMO_STORAGE_KEY, snapshot);
-      } else {
-        // Se vuelve a leer Drive justo antes de guardar para no pisar lo que haya guardado la otra persona.
-        const remote = await window.gymDrive.load();
-        const before = JSON.stringify(state);
-        const merged = mergeWithRemote(remote);
-        state = merged;
-        snapshot = JSON.stringify(state);
-        if (JSON.stringify({ ...JSON.parse(before), lastUpdated: null }) !== JSON.stringify({ ...JSON.parse(snapshot), lastUpdated: null })) renderAll();
-        await window.gymDrive.save(JSON.parse(snapshot));
+        localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(state));
+        dirty = false;
         PEOPLE.forEach(person => touched[person].clear());
         deletedExerciseIds.clear();
+        writeLocalCache();
+        setStatus("Modo prueba · guardado local", "connected");
+        if (!options.quiet) showToast("Guardado en este navegador (modo prueba).");
+        return true;
       }
-      dirty = JSON.stringify(state) !== snapshot;
-      setStatus(dirty ? "Hay cambios sin guardar" : demoMode && !connected() ? "Modo prueba · guardado local" : "Guardado en Drive", dirty ? "" : "connected");
-      showToast(dirty ? "Se guardó una parte; quedan cambios pendientes." : demoMode && !connected() ? "Guardado en este navegador (modo prueba)." : "Guardado en Google Drive.");
+
+      // The main file is synced first; backup rotation is deliberately excluded from this critical path.
+      const remote = await window.gymDrive.load();
+      const before = JSON.stringify(state);
+      state = mergeWithRemote(remote);
+      const snapshot = JSON.stringify(state);
+      if (JSON.stringify({ ...JSON.parse(before), lastUpdated: null }) !== JSON.stringify({ ...JSON.parse(snapshot), lastUpdated: null })) renderAll();
+      await window.gymDrive.save(JSON.parse(snapshot));
+      cloudRetryAfter = 0;
+      cloudRetryMs = 30000;
+      if (changeRevision === revisionAtStart) {
+        dirty = false;
+        PEOPLE.forEach(person => touched[person].clear());
+        deletedExerciseIds.clear();
+      } else {
+        dirty = true;
+      }
+      setStatus(dirty ? "Hay cambios locales pendientes" : "Sincronizado con Drive", dirty ? "" : "connected");
+      if (!dirty) writeLocalCache();
+      if (options.backup && typeof window.gymDrive.saveBackup === "function") {
+        window.gymDrive.saveBackup(JSON.parse(snapshot)).then(() => {
+          if (!options.quiet) showToast("Día guardado en Drive con copia de seguridad.");
+        }).catch(error => {
+          console.error("Los datos se guardaron, pero falló la copia de seguridad", error);
+          showToast("El día sí se guardó en Drive; no se pudo crear su copia de seguridad.");
+        });
+      } else if (!options.quiet) {
+        showToast(dirty ? "Datos guardados; quedan cambios nuevos pendientes." : "Datos guardados en Drive.");
+      }
       return !dirty;
     } catch (error) {
       console.error("No se pudo guardar", error);
-      setStatus("Error al guardar", "");
-      showToast(`No se pudo guardar: ${error.message || "comprueba la conexión"}`);
+      cloudRetryAfter = Date.now() + cloudRetryMs;
+      cloudRetryMs = Math.min(cloudRetryMs * 2, 300000);
+      setStatus("Guardado local · Drive pendiente", "");
+      writeLocalCache();
+      if (!connected()) {
+        $("#connect-button").textContent = "Reconectar Drive";
+        $("#connection-notice").classList.add("visible");
+        enableEditing(localCacheReady);
+      }
+      if (!options.quiet) showToast(`El borrador está guardado en este dispositivo, pero Drive no confirmó la sincronización: ${error.message || "comprueba la conexión"}`);
       return false;
     } finally {
       saving = false;
@@ -193,19 +347,27 @@
   }
 
   function onConnected(data) {
-    state = normalizeState(data);
+    if (dirty) {
+      state = mergeWithRemote(data);
+    } else {
+      state = normalizeState(data);
+      PEOPLE.forEach(person => touched[person].clear());
+      deletedExerciseIds.clear();
+    }
     demoMode = false;
-    dirty = false;
+    localCacheReady = true;
     renderAll();
     $("#connection-notice").classList.remove("visible");
     $("#connect-button").textContent = "Drive conectado";
     $("#connect-button").title = "Pulsa para desconectar";
-    setStatus("Guardado en Drive", "connected");
+    setStatus(dirty ? "Borrador local · sincronizando…" : "Sincronizado con Drive", dirty ? "busy" : "connected");
     enableEditing(true);
+    writeLocalCache();
+    if (dirty) saveChanges({ quiet: true });
   }
 
   async function connect(showErrors = true) {
-    if (demoMode && dirty && !confirm("Hay cambios de prueba sin guardar. Al conectar, se sustituirán por los datos de Drive. ¿Continuar?")) return;
+    if (demoMode && dirty && !confirm("Hay cambios guardados localmente. Al conectar, se fusionarán con los datos de Drive. ¿Continuar?")) return;
     const buttons = [$("#connect-button"), $("#notice-connect")].filter(Boolean);
     buttons.forEach(button => { button.disabled = true; });
     setStatus("Conectando…", "busy");
@@ -217,6 +379,7 @@
       console.error("Error de conexión con Drive", error);
       setStatus(demoMode ? "Modo prueba · guardado local" : "No conectado", demoMode ? "connected" : "");
       if (!demoMode) $("#connection-notice").classList.add("visible");
+      enableEditing(canEdit());
       if (showErrors) showToast(error.message || "No se pudo conectar con Google Drive.");
     } finally { buttons.forEach(button => { button.disabled = false; }); }
   }
@@ -239,15 +402,19 @@
 
   function startDemo() {
     if (connected()) return;
-    try {
-      const saved = localStorage.getItem(DEMO_STORAGE_KEY);
-      state = saved ? normalizeState(JSON.parse(saved)) : emptyState();
-    } catch (error) {
-      console.warn("No se pudieron recuperar los datos de prueba locales", error);
-      state = emptyState();
+    const hasLocalDraft = localCacheReady;
+    if (!hasLocalDraft) {
+      try {
+        const saved = localStorage.getItem(DEMO_STORAGE_KEY);
+        state = saved ? normalizeState(JSON.parse(saved)) : emptyState();
+      } catch (error) {
+        console.warn("No se pudieron recuperar los datos de prueba locales", error);
+        state = emptyState();
+      }
     }
     demoMode = true;
-    dirty = false;
+    localCacheReady = true;
+    if (!hasLocalDraft) dirty = false;
     $("#connection-notice").classList.remove("visible");
     $("#connect-button").textContent = "Conectar Drive";
     $("#connect-button").title = "Los datos de prueba están guardados solo en este navegador.";
@@ -444,7 +611,7 @@
     else sessions[key].locked = true;
     renderRoutine();
     persist();
-    showToast("Día terminado y bloqueado. Pulsa Guardar para conservarlo.");
+    saveChanges({ backup: true });
   }
 
   function renderExerciseCard(exercise) {
@@ -463,7 +630,7 @@
       </div>`;
     }).join("");
     return `<div class="exercise-card">
-      <div class="exercise-card-header"><h4>${escapeHtml(exercise.name)}</h4><span class="exercise-target">${exercise.sets} series × ${exercise.reps} repeticiones</span></div>
+      <div class="exercise-card-header"><h4>${escapeHtml(exercise.name)}</h4><div class="exercise-card-actions"><span class="exercise-target">${exercise.sets} series × ${exercise.reps} repeticiones</span><button class="mini-button progress-button" type="button" data-name="${escapeHtml(exercise.name)}">Progreso</button></div></div>
       ${exercise.comment ? `<p class="exercise-comment-note">${escapeHtml(exercise.comment)}</p>` : ""}
       ${previousHtml}
       <div class="set-rows">${rowsHtml}</div>
@@ -486,6 +653,7 @@
         }
       });
     });
+    $$(".progress-button").forEach(button => button.addEventListener("click", () => openProgress(button.dataset.name)));
   }
 
   function applySwap() {
@@ -650,6 +818,7 @@
   function renderAll() { renderPersonTabs(); renderRoutine(); renderExercises(); enableEditing(canEdit()); }
 
   function init() {
+    restoreLocalCache();
     fillSwapSelect();
     renderPersonTabs();
     $$(".tab").forEach(tab => tab.addEventListener("click", () => switchPanel(tab.dataset.panel)));
@@ -657,6 +826,8 @@
     $("#notice-connect").addEventListener("click", () => connect());
     $("#demo-button").addEventListener("click", startDemo);
     $("#save-button").addEventListener("click", saveChanges);
+    $("#progress-dialog-close").addEventListener("click", () => $("#progress-dialog").close());
+    $("#progress-dialog").addEventListener("click", event => { if (event.target === event.currentTarget) event.currentTarget.close(); });
 
     $("#previous-day").addEventListener("click", () => { viewedDate = plusDays(viewedDate, -1); renderRoutine(); });
     $("#next-day").addEventListener("click", () => { viewedDate = plusDays(viewedDate, 1); renderRoutine(); });
@@ -671,10 +842,19 @@
     try { if (localStorage.getItem(DEMO_STORAGE_KEY)) $("#demo-button").textContent = "Continuar prueba local"; } catch { /* almacenamiento no disponible */ }
 
     renderAll();
-    enableEditing(false);
-    setStatus("Conectando con Drive…", "busy");
+    enableEditing(localCacheReady);
+    setStatus(localCacheReady ? dirty ? "Borrador local recuperado" : "Datos locales disponibles" : "Conectando con Drive…", localCacheReady ? "" : "busy");
+    setInterval(writeLocalCache, 30000);
+    setInterval(() => { if (connected() && dirty && !saving) saveChanges({ quiet: true, automatic: true }); }, 30000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") {
+        writeLocalCache();
+        if (connected() && dirty && !saving) saveChanges({ quiet: true, automatic: true });
+      }
+    });
 
     window.addEventListener("beforeunload", event => {
+      writeLocalCache();
       if (!dirty) return;
       event.preventDefault();
       event.returnValue = "";
@@ -690,13 +870,15 @@
           onConnected(data);
           showToast("Conectado a Google Drive automáticamente.");
         } else {
-          setStatus("No conectado");
+          setStatus(localCacheReady ? dirty ? "Borrador local pendiente de Drive" : "Sin conexión · disponible en local" : "No conectado");
           $("#connection-notice").classList.add("visible");
+          enableEditing(localCacheReady);
         }
       } catch (error) {
         console.warn("No se pudo conectar automáticamente con Drive", error);
-        setStatus("No conectado");
+        setStatus(localCacheReady ? dirty ? "Borrador local pendiente de Drive" : "Sin conexión · disponible en local" : "No conectado");
         $("#connection-notice").classList.add("visible");
+        enableEditing(localCacheReady);
       }
     })();
   }
